@@ -1,3 +1,6 @@
+import 'dart:io';
+
+// ---------- CropArea ----------
 class CropArea {
   final String name;
   final double plantedArea;
@@ -9,14 +12,15 @@ class CropArea {
     }
     if (!plantedArea.isFinite || plantedArea <= 0) {
       throw ArgumentError.value(
-        plantedArea,
-        'plantedArea',
-        'Area must be positive and finite.',
-      );
+          plantedArea, 'plantedArea', 'Area must be positive and finite.');
     }
   }
+
+  double get areaInSquareMeters => plantedArea * 10000.0;
+  String describe() => '$name: $plantedArea ha';
 }
 
+// ---------- AgriculturalRecord ----------
 class AgriculturalRecord {
   final String municipality;
   final int year;
@@ -27,38 +31,63 @@ class AgriculturalRecord {
     required this.year,
     required List<CropArea> crops,
   })  : municipality = municipality.trim(),
-        crops = List.unmodifiable(crops) {
+        crops = List<CropArea>.unmodifiable(crops) {
     if (this.municipality.isEmpty) {
-      throw ArgumentError.value(municipality, 'municipality', 'Municipality is required.');
+      throw ArgumentError.value(
+          municipality, 'municipality', 'Municipality is required.');
     }
     if (year < 2000 || year > 2100) {
-      throw ArgumentError.value(year, 'year', 'Year must be between 2000 and 2100.');
+      throw ArgumentError.value(year, 'year', 'Invalid year.');
     }
-    if (crops.isEmpty) {
+    if (this.crops.isEmpty) {
       throw ArgumentError.value(crops, 'crops', 'At least one crop is required.');
     }
+    Set<String> uniqueNames = <String>{};
+    for (final crop in this.crops) {
+      if (!uniqueNames.add(crop.name.toLowerCase())) {
+        throw ArgumentError.value(crop.name, 'crop', 'Duplicate crop name.');
+      }
+    }
+    if (!totalArea.isFinite) {
+      throw ArgumentError('Total area must be finite.');
+    }
   }
 
-  double get totalArea => crops.fold(0.0, (sum, c) => sum + c.plantedArea);
+  double get totalArea {
+    double total = 0.0;
+    for (final crop in crops) {
+      total += crop.plantedArea;
+    }
+    return total;
+  }
+
   double get averageArea => totalArea / crops.length;
-  CropArea get largestCrop => crops.reduce((a, b) => a.plantedArea >= b.plantedArea ? a : b);
 
-  void printSummary() {
-    print('$municipality - $year');
-    print('Total: $totalArea | Average: ${averageArea.toStringAsFixed(2)}');
-    print('Largest: ${largestCrop.name} (${largestCrop.plantedArea}) - ${(largestCrop.plantedArea / totalArea * 100).toStringAsFixed(1)}%');
+  CropArea get largestCrop {
+    CropArea largest = crops.first;
+    for (final crop in crops.skip(1)) {
+      if (crop.plantedArea > largest.plantedArea) {
+        largest = crop;
+      }
+    }
+    return largest;
   }
+
+  double get largestShare => largestCrop.plantedArea / totalArea * 100;
 }
 
+// ---------- ObservationCatalog ----------
 class ObservationCatalog {
   final Map<String, AgriculturalRecord> _records = {};
 
   String _buildKey(String municipality, int year) {
-    return '${municipality.trim().toLowerCase()}-$year';
+    return '${municipality.trim().toLowerCase()} ($year)';
   }
 
+  int get count => _records.length;
+
   bool add(AgriculturalRecord record) {
-    final key = _buildKey(record.municipality, record.year);
+    String key = _buildKey(record.municipality, record.year);
     if (_records.containsKey(key)) return false;
     _records[key] = record;
     return true;
@@ -68,26 +97,191 @@ class ObservationCatalog {
     return _records[_buildKey(municipality, year)];
   }
 
-  List<AgriculturalRecord> listAll() => _records.values.toList();
-
   bool remove(String municipality, int year) {
     return _records.remove(_buildKey(municipality, year)) != null;
   }
 
-  int get count => _records.length;
+  List<AgriculturalRecord> listRecords() {
+    List<AgriculturalRecord> result = _records.values.toList();
+    result.sort((a, b) => _buildKey(a.municipality, a.year)
+        .compareTo(_buildKey(b.municipality, b.year)));
+    return List<AgriculturalRecord>.unmodifiable(result);
+  }
+
+  List<String> get uniqueCropNames {
+    Set<String> names = <String>{};
+    for (final record in _records.values) {
+      for (final crop in record.crops) {
+        names.add(crop.name.toLowerCase());
+      }
+    }
+    List<String> sorted = names.toList()..sort();
+    return List<String>.unmodifiable(sorted);
+  }
 }
 
+// ---------- Lectores ----------
+String? readRequiredText(String prompt) {
+  while (true) {
+    stdout.write(prompt);
+    String? line = stdin.readLineSync();
+    if (line == null) return null;
+    if (line.trim().isNotEmpty) return line.trim();
+    print('Value is required.');
+  }
+}
+
+int? readIntInRange(String prompt, int minimum, int maximum) {
+  while (true) {
+    stdout.write(prompt);
+    String? line = stdin.readLineSync();
+    if (line == null) return null;
+    int? value = int.tryParse(line.trim());
+    if (value != null && value >= minimum && value <= maximum) return value;
+    print('Enter a number between $minimum and $maximum.');
+  }
+}
+
+double? readPositiveArea(String prompt) {
+  while (true) {
+    stdout.write(prompt);
+    String? line = stdin.readLineSync();
+    if (line == null) return null;
+    double? value = double.tryParse(line.trim());
+    if (value != null && value.isFinite && value > 0) return value;
+    print('Enter a positive area.');
+  }
+}
+
+String? readUniqueCropName(String prompt, Set<String> usedNames) {
+  while (true) {
+    String? raw = readRequiredText(prompt);
+    if (raw == null) return null;
+    String normalized = raw.trim().toLowerCase();
+    if (!usedNames.add(normalized)) {
+      print('Crop already registered in this observation.');
+      continue;
+    }
+    return raw.trim();
+  }
+}
+
+// ---------- Funciones menú ----------
+bool registerObservation(ObservationCatalog catalog) {
+  String? municipality = readRequiredText('Municipality: ');
+  if (municipality == null) return false;
+  int? year = readIntInRange('Year (2000-2100): ', 2000, 2100);
+  if (year == null) return false;
+
+  if (catalog.find(municipality, year) != null) {
+    print('Observation already exists.');
+    return true;
+  }
+
+  int? cropCount = readIntInRange('Number of crops (1-5): ', 1, 5);
+  if (cropCount == null) return false;
+
+  List<CropArea> currentCrops = <CropArea>[];
+  Set<String> usedNames = <String>{};
+
+  for (int i = 1; i <= cropCount; i++) {
+    String? cropName = readUniqueCropName('Crop $i name: ', usedNames);
+    if (cropName == null) return false;
+    double? area = readPositiveArea('Crop $i area (ha): ');
+    if (area == null) return false;
+    currentCrops.add(CropArea(name: cropName, plantedArea: area));
+  }
+
+  AgriculturalRecord record = AgriculturalRecord(
+      municipality: municipality, year: year, crops: currentCrops);
+  bool added = catalog.add(record);
+  print(added ? 'Observation registered.' : 'Observation already exists.');
+  return true;
+}
+
+void listObservations(ObservationCatalog catalog) {
+  List<AgriculturalRecord> records = catalog.listRecords();
+  if (records.isEmpty) {
+    print('No observations registered.');
+    return;
+  }
+  for (final r in records) {
+    print('${r.municipality} (${r.year}): ${r.crops.length} crops');
+  }
+}
+
+void showObservation(AgriculturalRecord record) {
+  print('Municipality: ${record.municipality}');
+  print('Year: ${record.year}');
+  for (final crop in record.crops) {
+    print('${crop.name}: ${crop.plantedArea.toStringAsFixed(2)} ha');
+  }
+  print('Crops processed: ${record.crops.length}');
+  print('Total area: ${record.totalArea.toStringAsFixed(2)} ha');
+  print('Average area: ${record.averageArea.toStringAsFixed(2)} ha');
+  print('Largest crop: ${record.largestCrop.name}');
+  print('Largest share: ${record.largestShare.toStringAsFixed(2)}%');
+}
+
+bool viewObservation(ObservationCatalog catalog) {
+  String? municipality = readRequiredText('Municipality: ');
+  if (municipality == null) return false;
+  int? year = readIntInRange('Year (2000-2100): ', 2000, 2100);
+  if (year == null) return false;
+  AgriculturalRecord? record = catalog.find(municipality, year);
+  if (record == null) {
+    print('Observation not found.');
+    return true;
+  }
+  showObservation(record);
+  return true;
+}
+
+bool removeObservation(ObservationCatalog catalog) {
+  String? municipality = readRequiredText('Municipality: ');
+  if (municipality == null) return false;
+  int? year = readIntInRange('Year (2000-2100): ', 2000, 2100);
+  if (year == null) return false;
+  bool removed = catalog.remove(municipality, year);
+  print(removed ? 'Observation removed.' : 'Observation not found.');
+  return true;
+}
+
+// ---------- Main ----------
 void main() {
-  final catalog = ObservationCatalog();
-  catalog.add(AgriculturalRecord(
-    municipality: 'Andes',
-    year: 2025,
-    crops: [
-      CropArea(name: 'Coffee', plantedArea: 125),
-      CropArea(name: 'Beans', plantedArea: 75),
-      CropArea(name: 'Rice', plantedArea: 50),
-    ],
-  ));
-  catalog.find('Andes', 2025)?.printSummary();
-  print('Total records: ${catalog.count}');
+  ObservationCatalog catalog = ObservationCatalog();
+  while (true) {
+    print('================================');
+    print('       AGRODIVERSA OOP');
+    print('================================');
+    print('1. Register observation');
+    print('2. List observations');
+    print('3. View observation');
+    print('4. Show unique crops');
+    print('5. Remove observation');
+    print('0. Exit');
+    int? option = readIntInRange('Option: ', 0, 5);
+    if (option == null || option == 0) {
+      print('Goodbye!');
+      return;
+    }
+    switch (option) {
+      case 1:
+        if (!registerObservation(catalog)) return;
+      case 2:
+        listObservations(catalog);
+      case 3:
+        if (!viewObservation(catalog)) return;
+      case 4:
+        if (catalog.uniqueCropNames.isEmpty) {
+          print('No crops available.');
+        } else {
+          for (final name in catalog.uniqueCropNames) {
+            print(name);
+          }
+        }
+      case 5:
+        if (!removeObservation(catalog)) return;
+    }
+  }
 }
