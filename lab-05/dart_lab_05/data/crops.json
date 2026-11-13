@@ -1,0 +1,5 @@
+[
+  { "id": "C1", "name": "Coffee", "plantedArea": 125.0, "region": "Andes" },
+  { "id": "C2", "name": "Cacao", "plantedArea": 80.5, "region": "Amazonia" },
+  { "id": "C3", "name": "Banana", "plantedArea": 60.0, "region": "Caribe" }
+]
